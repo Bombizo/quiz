@@ -1,10 +1,10 @@
 import logging
 import os
+import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 # ═══════════════════════════════════════
-# Берём токен из переменных окружения (безопасно для Render)
 TOKEN = os.getenv("BOT_TOKEN", "ВСТАВЬ_ТОКЕН_ОТ_@BotFather")
 WEB_APP_URL = "https://bombizo.github.io/quiz"
 CHANNEL_ID = "@beautycosmet1ics"
@@ -46,7 +46,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )]
     ]
 
-    # Пробуем отправить PNG, если нет — JPG, если нет — текст
     photo_paths = ['photo.png', 'photo.jpg', 'photo.jpeg']
     sent = False
 
@@ -69,12 +68,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
-def main():
+async def main():
     application = Application.builder().token(TOKEN).build()
     application.add_handler(CommandHandler("start", start))
 
     print("🤖 Бот запущен!")
-    application.run_polling()
+    
+    await application.initialize()
+    await application.start()
+    await application.updater.start_polling()
+    
+    # Держим бота запущенным бесконечно
+    await asyncio.Event().wait()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
