@@ -1,8 +1,7 @@
 import os
 import logging
-import asyncio
 from flask import Flask, request, jsonify
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo, Bot
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
 # ═══════════════════════════════════════
@@ -11,36 +10,18 @@ WEB_APP_URL = "https://bombizo.github.io/quiz"
 CHANNEL_ID = "@beautycosmet1ics"
 # ═══════════════════════════════════════
 
-if not TOKEN:
-    raise ValueError("Переменная окружения TOKEN не установлена!")
-
+# Flask app
 app = Flask(__name__)
 
+# Настройка логирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# Создаём Application (инициализация отложена)
+# Создаём Application (без запуска polling)
 application = Application.builder().token(TOKEN).build()
-
-_initialized = False
-
-async def _ensure_initialized():
-    """Ленивая инициализация — только при первом запросе"""
-    global _initialized
-    if not _initialized:
-        await application.initialize()
-        _initialized = True
-        logger.info("Application initialized")
-
-def _run_async(coro):
-    return asyncio.run(coro)
-
-# ═══════════════════════════════════════
-# ХЕНДЛЕРЫ
-# ═══════════════════════════════════════
 
 async def check_subscription(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
     """Проверяет, подписан ли пользователь на канал"""
@@ -54,6 +35,7 @@ async def check_subscription(user_id: int, context: ContextTypes.DEFAULT_TYPE) -
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
+    # Проверка подписки
     is_subscribed = await check_subscription(user_id, context)
     if not is_subscribed:
         return await ask_subscribe(update, context)
@@ -79,6 +61,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )]
     ]
 
+    # Отправляем картинку + текст с кнопками
     photo_paths = ['photo.png', 'photo.jpg', 'photo.jpeg']
     sent = False
 
@@ -141,10 +124,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CallbackQueryHandler(button_handler, pattern="^check_subscribe$"))
 
-# ═══════════════════════════════════════
-# FLASK ROUTES
-# ═══════════════════════════════════════
-
+# Flask routes
 @app.route('/')
 def index():
     return '🤖 Бот работает!'
@@ -152,17 +132,21 @@ def index():
 @app.route(f'/{TOKEN}', methods=['POST'])
 def webhook():
     """Получает обновления от Telegram"""
-    _run_async(_ensure_initialized())
     update = Update.de_json(request.get_json(force=True), application.bot)
-    _run_async(application.process_update(update))
+
+    # Обрабатываем обновление
+    application.update_queue.put_nowait(update)
+
     return jsonify({'status': 'ok'})
 
 @app.route('/set_webhook', methods=['GET'])
 def set_webhook():
-    """Устанавливает webhook (вызвать один раз через браузер)"""
-    _run_async(_ensure_initialized())
+    """Устанавливает webhook (вызвать один раз)"""
+    # Для PythonAnywhere: https://username.pythonanywhere.com/TOKEN
     webhook_url = request.host_url.rstrip('/') + f'/{TOKEN}'
-    result = _run_async(application.bot.set_webhook(url=webhook_url))
+
+    result = application.bot.set_webhook(url=webhook_url)
+
     if result:
         return f'✅ Webhook установлен: {webhook_url}'
     else:
@@ -171,13 +155,17 @@ def set_webhook():
 @app.route('/delete_webhook', methods=['GET'])
 def delete_webhook():
     """Удаляет webhook"""
-    _run_async(_ensure_initialized())
-    result = _run_async(application.bot.delete_webhook())
+    result = application.bot.delete_webhook()
+
     if result:
         return '✅ Webhook удалён'
     else:
         return '❌ Ошибка удаления webhook'
 
+# Запускаем application (инициализация)
+import asyncio
+asyncio.run(application.initialize())
+
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
+    # Для локального тестирования
+    app.run(debug=True, port=5000)
