@@ -1,7 +1,7 @@
 import os
 import logging
 from flask import Flask, request, jsonify
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo, Bot
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
 # ═══════════════════════════════════════
@@ -20,7 +20,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Создаём Application (без запуска polling)
+# Создаём Application
 application = Application.builder().token(TOKEN).build()
 
 async def check_subscription(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -124,7 +124,35 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CallbackQueryHandler(button_handler, pattern="^check_subscribe$"))
 
+# ═══════════════════════════════════════════════════════════════
+# КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: Запускаем application в фоновом потоке
+# ═══════════════════════════════════════════════════════════════
+import threading
+
+def run_application():
+    """Запускает application.initialize() и application.start()"""
+    # Создаём новый event loop для этого потока
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    # Инициализация и запуск
+    loop.run_until_complete(application.initialize())
+    loop.run_until_complete(application.start())
+    # Держим loop живым
+    loop.run_forever()
+
+# Запускаем в отдельном потоке ДО запуска Flask
+app_thread = threading.Thread(target=run_application, daemon=True)
+app_thread.start()
+
+# Даём время на инициализацию
+import time
+time.sleep(2)
+
+# ═══════════════════════════════════════════════════════════════
 # Flask routes
+# ═══════════════════════════════════════════════════════════════
+
 @app.route('/')
 def index():
     return '🤖 Бот работает!'
@@ -134,16 +162,21 @@ def webhook():
     """Получает обновления от Telegram"""
     update = Update.de_json(request.get_json(force=True), application.bot)
 
-    # Обрабатываем обновление
-    application.update_queue.put_nowait(update)
+    # КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: Используем process_update вместо put_nowait
+    # Это корректно обрабатывает update в работающем application
+    asyncio.run(application.process_update(update))
 
     return jsonify({'status': 'ok'})
 
 @app.route('/set_webhook', methods=['GET'])
 def set_webhook():
     """Устанавливает webhook (вызвать один раз)"""
+    # ВАЖНО: Укажите свой HTTPS URL явно!
     # Для PythonAnywhere: https://username.pythonanywhere.com/TOKEN
-    webhook_url = request.host_url.rstrip('/') + f'/{TOKEN}'
+    webhook_url = f"https://your_username.pythonanywhere.com/{TOKEN}"
+    
+    # Или если хотите автоопределение (только если HTTPS!):
+    # webhook_url = request.host_url.rstrip('/') + f'/{TOKEN}'
 
     result = application.bot.set_webhook(url=webhook_url)
 
@@ -162,10 +195,5 @@ def delete_webhook():
     else:
         return '❌ Ошибка удаления webhook'
 
-# Запускаем application (инициализация)
-import asyncio
-asyncio.run(application.initialize())
-
 if __name__ == '__main__':
-    # Для локального тестирования
     app.run(debug=True, port=5000)
