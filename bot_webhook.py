@@ -1,16 +1,19 @@
 import os
 import asyncio
 import threading
+import time
 from flask import Flask, request, jsonify
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler
 
 TOKEN = os.environ.get("TOKEN", "ВСТАВЬ_ТОКЕН")
 WEB_APP_URL = "https://bombizo.github.io/quiz"
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "https://spf-calc-bot.onrender.com")
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "https://spf-calc-bot.onrender.com/set_webhook")
 
 app = Flask(__name__)
-application = Application.builder().token(TOKEN).build()
+
+# Глобальные переменные — заполняются в фоновом потоке
+application = None
 bot_loop = None
 
 
@@ -38,20 +41,23 @@ async def open_calculator(update, context):
     )
 
 
-application.add_handler(CommandHandler("start", start))
-application.add_handler(CallbackQueryHandler(open_calculator, pattern="^open_calculator$"))
-
-
 def run_bot():
-    global bot_loop
+    global application, bot_loop
     bot_loop = asyncio.new_event_loop()
     asyncio.set_event_loop(bot_loop)
+
+    # ⭐ Application создаём ВНУТРИ потока с loop'ом
+    application = Application.builder().token(TOKEN).build()
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CallbackQueryHandler(open_calculator, pattern="^open_calculator$"))
+
     bot_loop.run_until_complete(application.initialize())
     bot_loop.run_until_complete(application.start())
     bot_loop.run_forever()
 
 
 threading.Thread(target=run_bot, daemon=True).start()
+time.sleep(3)  # даём время на старт
 
 
 @app.route("/")
@@ -61,6 +67,9 @@ def index():
 
 @app.route(f"/{TOKEN}", methods=["POST"])
 def webhook():
+    if application is None:
+        return jsonify({"status": "not_ready"}), 503
+
     update = Update.de_json(request.get_json(force=True), application.bot)
     asyncio.run_coroutine_threadsafe(application.process_update(update), bot_loop)
     return jsonify({"status": "ok"})
