@@ -1,11 +1,12 @@
 import os
 import logging
+import asyncio
 from flask import Flask, request, jsonify
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
 # ═══════════════════════════════════════
-TOKEN = os.environ.get("TOKEN")
+TOKEN = "8821441014:AAGEKMInhtYDiZr2csxLeb92few2wcMGBVU"
 WEB_APP_URL = "https://bombizo.github.io/quiz"
 CHANNEL_ID = "@beautycosmet1ics"
 # ═══════════════════════════════════════
@@ -34,7 +35,12 @@ async def _ensure_initialized():
         _initialized = True
         logger.info("Application initialized")
 
-# ─── Хендлеры ───────────────────────────
+def _run_async(coro):
+    return asyncio.run(coro)
+
+# ═══════════════════════════════════════
+# ХЕНДЛЕРЫ
+# ═══════════════════════════════════════
 
 async def check_subscription(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
     """Проверяет, подписан ли пользователь на канал"""
@@ -135,38 +141,38 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CallbackQueryHandler(button_handler, pattern="^check_subscribe$"))
 
-# ─── Flask routes ─────────────────────
+# ═══════════════════════════════════════
+# FLASK ROUTES
+# ═══════════════════════════════════════
 
 @app.route('/')
 def index():
     return '🤖 Бот работает!'
 
 @app.route(f'/{TOKEN}', methods=['POST'])
-async def webhook():
+def webhook():
     """Получает обновления от Telegram"""
-    await _ensure_initialized()
+    _run_async(_ensure_initialized())
     update = Update.de_json(request.get_json(force=True), application.bot)
-    await application.process_update(update)
+    _run_async(application.process_update(update))
     return jsonify({'status': 'ok'})
 
 @app.route('/set_webhook', methods=['GET'])
-async def set_webhook():
+def set_webhook():
     """Устанавливает webhook (вызвать один раз через браузер)"""
-    await _ensure_initialized()
+    _run_async(_ensure_initialized())
     webhook_url = request.host_url.rstrip('/') + f'/{TOKEN}'
-    result = await application.bot.set_webhook(url=webhook_url)
-    
+    result = _run_async(application.bot.set_webhook(url=webhook_url))
     if result:
         return f'✅ Webhook установлен: {webhook_url}'
     else:
         return '❌ Ошибка установки webhook'
 
 @app.route('/delete_webhook', methods=['GET'])
-async def delete_webhook():
+def delete_webhook():
     """Удаляет webhook"""
-    await _ensure_initialized()
-    result = await application.bot.delete_webhook()
-    
+    _run_async(_ensure_initialized())
+    result = _run_async(application.bot.delete_webhook())
     if result:
         return '✅ Webhook удалён'
     else:
