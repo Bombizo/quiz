@@ -3,7 +3,6 @@ import logging
 import asyncio
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 from flask import Flask, request, jsonify
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
@@ -15,7 +14,6 @@ WEBHOOK_BASE_URL = os.environ.get("WEBHOOK_URL", "https://spf-calc-bot.onrender.
 CHANNEL_ID = "@beautycosmet1ics"
 # ═══════════════════════════════════════
 
-# Flask app
 app = Flask(__name__)
 
 logging.basicConfig(
@@ -24,27 +22,24 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Глобальные переменные (заполняются в фоновом потоке)
+application = None
+bot_loop = None
+ready_event = threading.Event()
+
+
 # ═══════════════════════════════════════════════════════════════
-# СОЗДАЁМ APPLICATION (без builder, чтобы контролировать loop)
+# ОБРАБОТЧИКИ
 # ═══════════════════════════════════════════════════════════════
 
-# Глобальный loop для бота
-bot_loop = asyncio.new_event_loop()
-
-def get_bot_loop():
-    return bot_loop
-
-# Создаём Application вручную с контролируемым loop
-application = Application.builder().token(TOKEN).build()
-
-# Регистрируем обработчики
 async def check_subscription(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
     try:
         member = await context.bot.get_chat_member(CHANNEL_ID, user_id)
         return member.status in ['member', 'administrator', 'creator']
     except Exception as e:
-        logger.error(f"Ошибка проверки подписки: {e}")
+        logger.error(f"Ошибка проверки подписки: {e}", exc_info=True)
         return False
+
 
 async def ask_subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = """🔒 Доступ к калькулятору только для подписчиков канала!
@@ -60,6 +55,7 @@ async def ask_subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text,
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -104,6 +100,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
+
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
@@ -124,6 +121,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ])
         )
 
+
 async def open_calculator_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
@@ -143,46 +141,56 @@ async def open_calculator_handler(update: Update, context: ContextTypes.DEFAULT_
         ])
     )
 
-application.add_handler(CommandHandler("start", start))
-application.add_handler(CallbackQueryHandler(button_handler, pattern="^check_subscribe$"))
-application.add_handler(CallbackQueryHandler(open_calculator_handler, pattern="^open_calculator$"))
+
+def setup_handlers(app_instance):
+    app_instance.add_handler(CommandHandler("start", start))
+    app_instance.add_handler(CallbackQueryHandler(button_handler, pattern="^check_subscribe$"))
+    app_instance.add_handler(CallbackQueryHandler(open_calculator_handler, pattern="^open_calculator$"))
 
 
 # ═══════════════════════════════════════════════════════════════
-# ЗАПУСК APPLICATION В ФОНОВОМ ПОТОКЕ
+# ФОНОВЫЙ ПОТОК: Создаём Application внутри loop
 # ═══════════════════════════════════════════════════════════════
 
 def run_bot():
-    """Запускает bot event loop в отдельном потоке"""
+    global application, bot_loop
+    bot_loop = asyncio.new_event_loop()
     asyncio.set_event_loop(bot_loop)
-    
-    # Инициализация
+
+    # ⭐ Создаём Application внутри фонового потока — все объекты привязываются к bot_loop
+    application = Application.builder().token(TOKEN).build()
+    setup_handlers(application)
+
+    # Инициализация (получаем info о боте, создаём сессии)
     bot_loop.run_until_complete(application.initialize())
     logger.info("✅ Application initialized")
-    
-    # Запускаем updater (без polling/webhook — просто фоновые задачи)
-    bot_loop.run_until_complete(application.start())
-    logger.info("✅ Application started")
-    
-    # Держим loop открытым
+
+    # Сигнализируем Flask, что можно принимать запросы
+    ready_event.set()
+
+    # Держим loop открытым для обработки webhook-запросов
     bot_loop.run_forever()
 
-# Запускаем ДО Flask
+
+# Запускаем бота в фоновом потоке
 bot_thread = threading.Thread(target=run_bot, daemon=True)
 bot_thread.start()
 
-# Ждём инициализации
-time.sleep(3)
+# Ждём инициализации (макс 10 сек)
+if not ready_event.wait(timeout=10):
+    logger.error("❌ Таймаут инициализации бота!")
 
-logger.info("🚀 Bot thread started, launching Flask...")
+logger.info(f"🚀 Bot ready: alive={bot_thread.is_alive()}, app={application is not None}")
 
 
 # ═══════════════════════════════════════════════════════════════
-# ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ ВЫЗОВА async ИЗ SYNC
+# ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ: Запуск async в фоновом loop
 # ═══════════════════════════════════════════════════════════════
 
 def run_async(coro):
     """Выполняет корутину в bot_loop и возвращает результат"""
+    if bot_loop is None or application is None:
+        raise RuntimeError("Bot not initialized")
     future = asyncio.run_coroutine_threadsafe(coro, bot_loop)
     return future.result(timeout=15)
 
@@ -195,16 +203,17 @@ def run_async(coro):
 def index():
     return '🤖 Бот работает!'
 
+
 @app.route(f'/{TOKEN}', methods=['POST'])
 def webhook():
-    """Получает обновления от Telegram"""
     try:
         update = Update.de_json(request.get_json(force=True), application.bot)
         run_async(application.process_update(update))
         return jsonify({'status': 'ok'})
     except Exception as e:
-        logger.error(f"Ошибка обработки update: {e}")
+        logger.error(f"Ошибка обработки update: {e}", exc_info=True)
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
 
 @app.route('/set_webhook', methods=['GET'])
 def set_webhook():
@@ -216,7 +225,9 @@ def set_webhook():
         else:
             return '❌ Ошибка установки webhook'
     except Exception as e:
-        return f'❌ Ошибка: {e}'
+        logger.error(f"Ошибка set_webhook: {e}", exc_info=True)
+        return f'❌ Ошибка: {str(e)}'
+
 
 @app.route('/delete_webhook', methods=['GET'])
 def delete_webhook():
