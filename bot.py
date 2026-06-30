@@ -1,69 +1,80 @@
-from aiogram import Bot, Dispatcher, Router, F
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
-from aiogram.filters import Command
+import logging
 import os
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+from telegram.ext import Application, CommandHandler, ContextTypes
 
-# === Конфигурация ===
-BOT_TOKEN = os.getenv("BOT_TOKEN")  # токен из переменных окружения Render
-CHANNEL = "@ваш_канал"              # ← замените на ваш канал
-MINI_APP_URL = "https://t.me/ваш_бот?profile"  # ← замените на ссылку мини-приложения
+# ═══════════════════════════════════════
+# Берём токен из переменных окружения (безопасно для Render)
+TOKEN = os.getenv("BOT_TOKEN", "ВСТАВЬ_ТОКЕН_ОТ_@BotFather")
+WEB_APP_URL = "https://bombizo.github.io/quiz"
+CHANNEL_ID = "@beautycosmet1ics"
+# ═══════════════════════════════════════
 
-# === Инициализация ===
-bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher()
-router = Router()
-
-# === Текст приветствия ===
-WELCOME_TEXT = (
-    "👋 Добро пожаловать, {first_name}!\n\n"
-    "☀️ Наш калькулятор SPF подбирает оптимальный уровень солнцезащиты "
-    "под ваш тип кожи, планируемую активность и погодные условия.\n\n"
-    "Канал: {channel}\n"
-    "Мини-приложение: {mini_app}"
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
 )
 
-# === Клавиатура ===
-def get_welcome_keyboard():
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🧡 Наш Telegram канал", url=f"https://t.me/{CHANNEL.lstrip('@')}")],
-        [InlineKeyboardButton(text="✅ Открыть мини-приложение", url=MINI_APP_URL)]
-    ])
+async def check_subscription(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    try:
+        member = await context.bot.get_chat_member(CHANNEL_ID, user_id)
+        return member.status in ['member', 'administrator', 'creator']
+    except Exception:
+        return False
 
-# === Хендлер /start ===
-@router.message(Command("start"))
-async def cmd_start(message: Message):
-    # Путь к фото (в корне проекта на Render)
-    photo_path = os.path.join(os.path.dirname(__file__), "photo.png")
-    
-    # Проверяем, есть ли фото локально
-    if os.path.exists(photo_path):
-        photo = FSInputFile(photo_path)
-        await message.answer_photo(
-            photo=photo,
-            caption=WELCOME_TEXT.format(
-                first_name=message.from_user.first_name,
-                channel=CHANNEL,
-                mini_app=MINI_APP_URL
-            ),
-            reply_markup=get_welcome_keyboard()
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+
+    welcome_text = """👋 Добро пожаловать, {name}!
+
+🔥 Я собираю актуальные промокоды, скидки и полезную информацию по уходу за кожей.
+
+🌞 Калькулятор фототипа SPF:
+4 вопроса + ваш SPF и UV-индекс → точное безопасное время на солнце. Промокоды на средства под ваш результат — в канале @beautycosmet1ics.
+
+Канал: @beautycosmet1ics
+Мини-приложение: https://t.me/spf_calc_bot""".format(name=update.effective_user.first_name)
+
+    keyboard = [
+        [InlineKeyboardButton(
+            text="🌞 Открыть калькулятор SPF",
+            web_app=WebAppInfo(url=WEB_APP_URL)
+        )],
+        [InlineKeyboardButton(
+            text="📢 Наш Telegram канал",
+            url="https://t.me/beautycosmet1ics"
+        )]
+    ]
+
+    # Пробуем отправить PNG, если нет — JPG, если нет — текст
+    photo_paths = ['photo.png', 'photo.jpg', 'photo.jpeg']
+    sent = False
+
+    for path in photo_paths:
+        try:
+            with open(path, 'rb') as photo:
+                await update.message.reply_photo(
+                    photo=photo,
+                    caption=welcome_text,
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+            sent = True
+            break
+        except FileNotFoundError:
+            continue
+
+    if not sent:
+        await update.message.reply_text(
+            welcome_text,
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
-    else:
-        # Если фото нет — отправляем текст
-        await message.answer(
-            WELCOME_TEXT.format(
-                first_name=message.from_user.first_name,
-                channel=CHANNEL,
-                mini_app=MINI_APP_URL
-            ),
-            reply_markup=get_welcome_keyboard()
-        )
 
-# === Регистрация роутера и запуск ===
-dp.include_router(router)
+def main():
+    application = Application.builder().token(TOKEN).build()
+    application.add_handler(CommandHandler("start", start))
 
-async def main():
-    await dp.start_polling(bot)
+    print("🤖 Бот запущен!")
+    application.run_polling()
 
 if __name__ == "__main__":
-    import asyncio
-    asyncio.run(main())
+    main()
