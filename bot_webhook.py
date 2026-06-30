@@ -1,8 +1,6 @@
 import os
 import logging
 import asyncio
-import threading
-import time
 from flask import Flask, request, jsonify
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
@@ -10,7 +8,7 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Cont
 # ═══════════════════════════════════════
 TOKEN = os.environ.get("TOKEN", "ВСТАВЬ_ТОКЕН_ОТ_@BotFather")
 WEB_APP_URL = "https://bombizo.github.io/quiz"
-WEBHOOK_BASE_URL = os.environ.get("WEBHOOK_URL", "https://ваш-сервис.onrender.com")
+WEBHOOK_BASE_URL = os.environ.get("WEBHOOK_URL", "https://spf-calc-bot.onrender.com")
 CHANNEL_ID = "@beautycosmet1ics"
 # ═══════════════════════════════════════
 
@@ -152,34 +150,16 @@ application.add_handler(CallbackQueryHandler(open_calculator_handler, pattern="^
 
 
 # ═══════════════════════════════════════════════════════════════
-# ЗАПУСК APPLICATION В ФОНОВОМ ПОТОКЕ (ИСПРАВЛЕНО)
+# ИНИЦИАЛИЗАЦИЯ (без фонового потока!)
 # ═══════════════════════════════════════════════════════════════
 
-# Глобальная переменная для доступа к loop из webhook
-app_loop = None
-
-def run_application():
-    global app_loop
-    app_loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(app_loop)
-    
-    # Инициализация
-    app_loop.run_until_complete(application.initialize())
-    
-    # Запускаем updater в фоне (без блокировки)
-    # application.start() запускает фоновые задачи
-    app_loop.run_until_complete(application.start())
-    
-    # Держим loop открытым
-    app_loop.run_forever()
-
-app_thread = threading.Thread(target=run_application, daemon=True)
-app_thread.start()
-time.sleep(3)  # Даём время на инициализацию
+# Инициализируем application один раз при импорте
+# В Render это выполняется при старте сервиса
+asyncio.run(application.initialize())
 
 
 # ═══════════════════════════════════════════════════════════════
-# FLASK ROUTES (ИСПРАВЛЕН WEBHOOK)
+# FLASK ROUTES
 # ═══════════════════════════════════════════════════════════════
 
 @app.route('/')
@@ -189,18 +169,13 @@ def index():
 
 @app.route(f'/{TOKEN}', methods=['POST'])
 def webhook():
-    """Получает обновления от Telegram — передаёт в loop application"""
+    """Получает обновления от Telegram"""
     update = Update.de_json(request.get_json(force=True), application.bot)
     
-    # ИСПРАВЛЕНО: Используем loop фонового потока вместо asyncio.run()
-    future = asyncio.run_coroutine_threadsafe(
-        application.process_update(update), 
-        app_loop
-    )
-    
-    # Ждём завершения с таймаутом
+    # Создаём новый event loop для каждого запроса
+    # python-telegram-bot v20+ корректно работает с новым loop
     try:
-        future.result(timeout=10)
+        asyncio.run(application.process_update(update))
     except Exception as e:
         logger.error(f"Ошибка обработки update: {e}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
@@ -212,14 +187,8 @@ def webhook():
 def set_webhook():
     webhook_url = f"{WEBHOOK_BASE_URL}/{TOKEN}"
     
-    # ИСПРАВЛЕНО: Используем loop фонового потока
-    future = asyncio.run_coroutine_threadsafe(
-        application.bot.set_webhook(url=webhook_url),
-        app_loop
-    )
-    
     try:
-        result = future.result(timeout=10)
+        result = asyncio.run(application.bot.set_webhook(url=webhook_url))
         if result:
             return f'✅ Webhook установлен: {webhook_url}'
         else:
@@ -230,13 +199,8 @@ def set_webhook():
 
 @app.route('/delete_webhook', methods=['GET'])
 def delete_webhook():
-    future = asyncio.run_coroutine_threadsafe(
-        application.bot.delete_webhook(),
-        app_loop
-    )
-    
     try:
-        result = future.result(timeout=10)
+        result = asyncio.run(application.bot.delete_webhook())
         if result:
             return '✅ Webhook удалён'
         else:
