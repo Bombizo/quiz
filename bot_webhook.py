@@ -7,7 +7,7 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler
 
 TOKEN = os.environ.get("TOKEN", "ВСТАВЬ_ТОКЕН")
 WEB_APP_URL = "https://bombizo.github.io/quiz"
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "https://ваш-сервис.onrender.com")
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "https://spf-calc-bot.onrender.com")
 
 app = Flask(__name__)
 application = Application.builder().token(TOKEN).build()
