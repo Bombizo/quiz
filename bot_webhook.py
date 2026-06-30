@@ -108,16 +108,25 @@ async def ask_subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
-
     user_id = query.from_user.id
     is_subscribed = await check_subscription(user_id, context)
 
     if is_subscribed:
+        await query.answer("✅ Подписка подтверждена!")
         await query.delete_message()
         await start(update, context)
     else:
-        await query.answer("❌ Вы ещё не подписались на канал! Сначала подпишитесь.", show_alert=True)
+        # Отвечаем на callback query с alert
+        await query.answer("❌ Вы ещё не подписались на канал!", show_alert=True)
+        # Отправляем сообщение в чат с повторным призывом подписаться
+        await query.message.reply_text(
+            "❌ Вы не подписаны на канал @beautycosmet1ics!\n\n"
+            "Подпишитесь и нажмите кнопку «✅ Я подписался» снова.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📢 Подписаться на канал", url="https://t.me/beautycosmet1ics")],
+                [InlineKeyboardButton("✅ Я подписался", callback_data="check_subscribe")]
+            ])
+        )
 
 # Регистрируем обработчики
 application.add_handler(CommandHandler("start", start))
