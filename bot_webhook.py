@@ -1,5 +1,8 @@
 import os
 import logging
+import asyncio        # ← ДОБАВИТЬ ЭТО
+import threading      # ← ДОБАВИТЬ ЭТО
+import time           # ← ДОБАВИТЬ ЭТО
 from flask import Flask, request, jsonify
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
@@ -35,7 +38,6 @@ async def check_subscription(user_id: int, context: ContextTypes.DEFAULT_TYPE) -
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
-    # Проверка подписки
     is_subscribed = await check_subscription(user_id, context)
     if not is_subscribed:
         return await ask_subscribe(update, context)
@@ -61,7 +63,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )]
     ]
 
-    # Отправляем картинку + текст с кнопками
     photo_paths = ['photo.png', 'photo.jpg', 'photo.jpeg']
     sent = False
 
@@ -85,7 +86,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 async def ask_subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показывает сообщение с требованием подписки"""
     text = """🔒 Доступ к калькулятору только для подписчиков канала!
 
 Подпишитесь на @beautycosmet1ics и возвращайтесь — бот станет доступен автоматически."""
@@ -107,7 +107,6 @@ async def ask_subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка нажатия 'Я подписался'"""
     query = update.callback_query
     await query.answer()
 
@@ -125,28 +124,17 @@ application.add_handler(CommandHandler("start", start))
 application.add_handler(CallbackQueryHandler(button_handler, pattern="^check_subscribe$"))
 
 # ═══════════════════════════════════════════════════════════════
-# КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: Запускаем application в фоновом потоке
+# Запускаем application в фоновом потоке
 # ═══════════════════════════════════════════════════════════════
-import threading
-
 def run_application():
-    """Запускает application.initialize() и application.start()"""
-    # Создаём новый event loop для этого потока
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    
-    # Инициализация и запуск
     loop.run_until_complete(application.initialize())
     loop.run_until_complete(application.start())
-    # Держим loop живым
     loop.run_forever()
 
-# Запускаем в отдельном потоке ДО запуска Flask
 app_thread = threading.Thread(target=run_application, daemon=True)
 app_thread.start()
-
-# Даём время на инициализацию
-import time
 time.sleep(2)
 
 # ═══════════════════════════════════════════════════════════════
@@ -159,27 +147,14 @@ def index():
 
 @app.route(f'/{TOKEN}', methods=['POST'])
 def webhook():
-    """Получает обновления от Telegram"""
     update = Update.de_json(request.get_json(force=True), application.bot)
-
-    # КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: Используем process_update вместо put_nowait
-    # Это корректно обрабатывает update в работающем application
     asyncio.run(application.process_update(update))
-
     return jsonify({'status': 'ok'})
 
 @app.route('/set_webhook', methods=['GET'])
 def set_webhook():
-    """Устанавливает webhook (вызвать один раз)"""
-    # ВАЖНО: Укажите свой HTTPS URL явно!
-    # Для PythonAnywhere: https://username.pythonanywhere.com/TOKEN
-    webhook_url = f"https://your_username.pythonanywhere.com/{TOKEN}"
-    
-    # Или если хотите автоопределение (только если HTTPS!):
-    # webhook_url = request.host_url.rstrip('/') + f'/{TOKEN}'
-
+    webhook_url = f"https://https://spf-calc-bot.onrender.com/{TOKEN}"
     result = application.bot.set_webhook(url=webhook_url)
-
     if result:
         return f'✅ Webhook установлен: {webhook_url}'
     else:
@@ -187,9 +162,7 @@ def set_webhook():
 
 @app.route('/delete_webhook', methods=['GET'])
 def delete_webhook():
-    """Удаляет webhook"""
     result = application.bot.delete_webhook()
-
     if result:
         return '✅ Webhook удалён'
     else:
