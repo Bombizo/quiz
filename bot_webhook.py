@@ -2,7 +2,6 @@ import os
 import logging
 import asyncio
 import threading
-import time
 from flask import Flask, request, jsonify
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
@@ -51,7 +50,8 @@ async def ask_subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("✅ Я подписался", callback_data="check_subscribe")]
     ]
 
-    await update.message.reply_text(
+    # effective_message работает и для обычных сообщений, и для callback query
+    await update.effective_message.reply_text(
         text,
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
@@ -80,22 +80,24 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     photo_paths = ['photo.png', 'photo.jpg', 'photo.jpeg']
     sent = False
+    message = update.effective_message
 
     for path in photo_paths:
-        try:
-            with open(path, 'rb') as photo:
-                await update.message.reply_photo(
-                    photo=photo,
-                    caption=welcome_text,
-                    reply_markup=InlineKeyboardMarkup(keyboard)
-                )
-            sent = True
-            break
-        except FileNotFoundError:
-            continue
+        if os.path.exists(path):
+            try:
+                with open(path, 'rb') as photo:
+                    await message.reply_photo(
+                        photo=photo,
+                        caption=welcome_text,
+                        reply_markup=InlineKeyboardMarkup(keyboard)
+                    )
+                sent = True
+                break
+            except Exception as e:
+                logger.warning(f"Не удалось отправить фото {path}: {e}")
 
     if not sent:
-        await update.message.reply_text(
+        await message.reply_text(
             welcome_text,
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
@@ -108,8 +110,33 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if is_subscribed:
         await query.answer("✅ Подписка подтверждена!")
-        await query.delete_message()
-        await start(update, context)
+        try:
+            await query.delete_message()
+        except Exception as e:
+            logger.warning(f"Не удалось удалить сообщение: {e}")
+
+        # Отправляем приветствие новым сообщением, а не через start(),
+        # иначе reply на удалённое сообщение упадёт
+        welcome_text = """👋 Добро пожаловать, {name}!
+
+🔥 Я собираю актуальные промокоды, скидки и полезную информацию по уходу за кожей.
+
+🌞 Калькулятор фототипа SPF:
+4 вопроса + ваш SPF и UV-индекс → точное безопасное время на солнце. Промокоды на средства под ваш результат — в канале @beautycosmet1ics.
+
+Канал: @beautycosmet1ics
+Мини-приложение: https://t.me/spf_calc_bot""".format(name=query.from_user.first_name)
+
+        keyboard = [
+            [InlineKeyboardButton("🌞 Открыть калькулятор SPF", callback_data="open_calculator")],
+            [InlineKeyboardButton("📢 Наш Telegram канал", url="https://t.me/beautycosmet1ics")]
+        ]
+
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text=welcome_text,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
     else:
         await query.answer("❌ Вы ещё не подписались на канал!", show_alert=True)
         await query.message.reply_text(
@@ -157,13 +184,13 @@ def run_bot():
     bot_loop = asyncio.new_event_loop()
     asyncio.set_event_loop(bot_loop)
 
-    # ⭐ Создаём Application внутри фонового потока — все объекты привязываются к bot_loop
     application = Application.builder().token(TOKEN).build()
     setup_handlers(application)
 
-    # Инициализация (получаем info о боте, создаём сессии)
+    # Инициализация + запуск внутренних механизмов PTB
     bot_loop.run_until_complete(application.initialize())
-    logger.info("✅ Application initialized")
+    bot_loop.run_until_complete(application.start())
+    logger.info("✅ Application initialized and started")
 
     # Сигнализируем Flask, что можно принимать запросы
     ready_event.set()
@@ -176,8 +203,8 @@ def run_bot():
 bot_thread = threading.Thread(target=run_bot, daemon=True)
 bot_thread.start()
 
-# Ждём инициализации (макс 10 сек)
-if not ready_event.wait(timeout=10):
+# Ждём инициализации (макс 15 сек)
+if not ready_event.wait(timeout=15):
     logger.error("❌ Таймаут инициализации бота!")
 
 logger.info(f"🚀 Bot ready: alive={bot_thread.is_alive()}, app={application is not None}")
@@ -187,12 +214,12 @@ logger.info(f"🚀 Bot ready: alive={bot_thread.is_alive()}, app={application is
 # ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ: Запуск async в фоновом loop
 # ═══════════════════════════════════════════════════════════════
 
-def run_async(coro):
+def run_async(coro, timeout=30):
     """Выполняет корутину в bot_loop и возвращает результат"""
     if bot_loop is None or application is None:
         raise RuntimeError("Bot not initialized")
     future = asyncio.run_coroutine_threadsafe(coro, bot_loop)
-    return future.result(timeout=15)
+    return future.result(timeout=timeout)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -206,9 +233,16 @@ def index():
 
 @app.route(f'/{TOKEN}', methods=['POST'])
 def webhook():
+    # Защита от запросов до готовности бота
+    if application is None or bot_loop is None:
+        logger.warning("⏳ Бот ещё не инициализирован, возвращаем 503")
+        return jsonify({'status': 'not_ready'}), 503
+
     try:
         update = Update.de_json(request.get_json(force=True), application.bot)
-        run_async(application.process_update(update))
+        # ⭐ КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: не блокируем Flask.
+        # Ставим задачу в очередь фонового loop и сразу отвечаем Telegram 200 OK.
+        asyncio.run_coroutine_threadsafe(application.process_update(update), bot_loop)
         return jsonify({'status': 'ok'})
     except Exception as e:
         logger.error(f"Ошибка обработки update: {e}", exc_info=True)
@@ -217,9 +251,12 @@ def webhook():
 
 @app.route('/set_webhook', methods=['GET'])
 def set_webhook():
+    if application is None or bot_loop is None:
+        return '❌ Бот ещё не готов', 503
+
     try:
         webhook_url = f"{WEBHOOK_BASE_URL}/{TOKEN}"
-        result = run_async(application.bot.set_webhook(url=webhook_url))
+        result = run_async(application.bot.set_webhook(url=webhook_url), timeout=30)
         if result:
             return f'✅ Webhook установлен: {webhook_url}'
         else:
@@ -231,8 +268,11 @@ def set_webhook():
 
 @app.route('/delete_webhook', methods=['GET'])
 def delete_webhook():
+    if application is None or bot_loop is None:
+        return '❌ Бот ещё не готов', 503
+
     try:
-        result = run_async(application.bot.delete_webhook())
+        result = run_async(application.bot.delete_webhook(), timeout=30)
         if result:
             return '✅ Webhook удалён'
         else:
