@@ -17,7 +17,6 @@ CHANNEL_ID = "@beautycosmet1ics"
 # Flask app
 app = Flask(__name__)
 
-# Настройка логирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
@@ -33,7 +32,6 @@ application = Application.builder().token(TOKEN).build()
 # ═══════════════════════════════════════════════════════════════
 
 async def check_subscription(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """Проверяет, подписан ли пользователь на канал"""
     try:
         member = await context.bot.get_chat_member(CHANNEL_ID, user_id)
         return member.status in ['member', 'administrator', 'creator']
@@ -43,20 +41,13 @@ async def check_subscription(user_id: int, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def ask_subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показывает сообщение с требованием подписки"""
     text = """🔒 Доступ к калькулятору только для подписчиков канала!
 
 Подпишитесь на @beautycosmet1ics и возвращайтесь — бот станет доступен автоматически."""
 
     keyboard = [
-        [InlineKeyboardButton(
-            text="📢 Подписаться на канал",
-            url="https://t.me/beautycosmet1ics"
-        )],
-        [InlineKeyboardButton(
-            text="✅ Я подписался",
-            callback_data="check_subscribe"
-        )]
+        [InlineKeyboardButton("📢 Подписаться на канал", url="https://t.me/beautycosmet1ics")],
+        [InlineKeyboardButton("✅ Я подписался", callback_data="check_subscribe")]
     ]
 
     await update.message.reply_text(
@@ -66,14 +57,11 @@ async def ask_subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ═══════════════════════════════════════════════════════════════
-# ОБРАБОТЧИКИ КОМАНД
+# ОБРАБОТЧИКИ
 # ═══════════════════════════════════════════════════════════════
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка команды /start"""
     user_id = update.effective_user.id
-
-    # Проверка подписки
     is_subscribed = await check_subscription(user_id, context)
     if not is_subscribed:
         return await ask_subscribe(update, context)
@@ -89,17 +77,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 Мини-приложение: https://t.me/spf_calc_bot""".format(name=update.effective_user.first_name)
 
     keyboard = [
-        [InlineKeyboardButton(
-            text="🌞 Открыть калькулятор SPF",
-            callback_data="open_calculator"  # ← callback вместо web_app!
-        )],
-        [InlineKeyboardButton(
-            text="📢 Наш Telegram канал",
-            url="https://t.me/beautycosmet1ics"
-        )]
+        [InlineKeyboardButton("🌞 Открыть калькулятор SPF", callback_data="open_calculator")],
+        [InlineKeyboardButton("📢 Наш Telegram канал", url="https://t.me/beautycosmet1ics")]
     ]
 
-    # Отправляем картинку + текст с кнопками
     photo_paths = ['photo.png', 'photo.jpg', 'photo.jpeg']
     sent = False
 
@@ -123,25 +104,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-# ═══════════════════════════════════════════════════════════════
-# ОБРАБОТЧИКИ CALLBACK-КНОПОК
-# ═══════════════════════════════════════════════════════════════
-
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка нажатия 'Я подписался'"""
     query = update.callback_query
     user_id = query.from_user.id
     is_subscribed = await check_subscription(user_id, context)
 
     if is_subscribed:
-        # Подписан — удаляем сообщение с требованием и показываем старт
         await query.answer("✅ Подписка подтверждена!")
         await query.delete_message()
         await start(update, context)
     else:
-        # НЕ подписан — показываем alert + отправляем сообщение в чат
         await query.answer("❌ Вы ещё не подписались на канал!", show_alert=True)
-
         await query.message.reply_text(
             "❌ Проверка не пройдена! Вы не подписаны на @beautycosmet1ics.\n\n"
             "👉 Подпишитесь на канал и нажмите кнопку «✅ Я подписался» ещё раз.",
@@ -153,11 +126,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def open_calculator_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка нажатия 'Открыть калькулятор SPF' — проверяет подписку заново"""
     query = update.callback_query
     user_id = query.from_user.id
-
-    # Повторная проверка подписки (на всякий случай)
     is_subscribed = await check_subscription(user_id, context)
 
     if not is_subscribed:
@@ -165,17 +135,12 @@ async def open_calculator_handler(update: Update, context: ContextTypes.DEFAULT_
         await ask_subscribe(update, context)
         return
 
-    # Подписан — открываем калькулятор
     await query.answer("🌞 Открываю калькулятор...")
 
-    # Отправляем кнопку с web_app для открытия
     await query.message.reply_text(
         "🌞 Нажмите кнопку ниже, чтобы открыть калькулятор:",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton(
-                text="🧴 Открыть калькулятор SPF",
-                web_app=WebAppInfo(url=WEB_APP_URL)
-            )]
+            [InlineKeyboardButton("🧴 Открыть калькулятор SPF", web_app=WebAppInfo(url=WEB_APP_URL))]
         ])
     )
 
@@ -187,22 +152,34 @@ application.add_handler(CallbackQueryHandler(open_calculator_handler, pattern="^
 
 
 # ═══════════════════════════════════════════════════════════════
-# Запускаем application в фоновом потоке
+# ЗАПУСК APPLICATION В ФОНОВОМ ПОТОКЕ (ИСПРАВЛЕНО)
 # ═══════════════════════════════════════════════════════════════
+
+# Глобальная переменная для доступа к loop из webhook
+app_loop = None
+
 def run_application():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(application.initialize())
-    loop.run_until_complete(application.start())
-    loop.run_forever()
+    global app_loop
+    app_loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(app_loop)
+    
+    # Инициализация
+    app_loop.run_until_complete(application.initialize())
+    
+    # Запускаем updater в фоне (без блокировки)
+    # application.start() запускает фоновые задачи
+    app_loop.run_until_complete(application.start())
+    
+    # Держим loop открытым
+    app_loop.run_forever()
 
 app_thread = threading.Thread(target=run_application, daemon=True)
 app_thread.start()
-time.sleep(2)
+time.sleep(3)  # Даём время на инициализацию
 
 
 # ═══════════════════════════════════════════════════════════════
-# Flask routes
+# FLASK ROUTES (ИСПРАВЛЕН WEBHOOK)
 # ═══════════════════════════════════════════════════════════════
 
 @app.route('/')
@@ -212,33 +189,60 @@ def index():
 
 @app.route(f'/{TOKEN}', methods=['POST'])
 def webhook():
-    """Получает обновления от Telegram"""
+    """Получает обновления от Telegram — передаёт в loop application"""
     update = Update.de_json(request.get_json(force=True), application.bot)
-    asyncio.run(application.process_update(update))
+    
+    # ИСПРАВЛЕНО: Используем loop фонового потока вместо asyncio.run()
+    future = asyncio.run_coroutine_threadsafe(
+        application.process_update(update), 
+        app_loop
+    )
+    
+    # Ждём завершения с таймаутом
+    try:
+        future.result(timeout=10)
+    except Exception as e:
+        logger.error(f"Ошибка обработки update: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+    
     return jsonify({'status': 'ok'})
 
 
 @app.route('/set_webhook', methods=['GET'])
 def set_webhook():
-    """Устанавливает webhook (вызвать один раз)"""
     webhook_url = f"{WEBHOOK_BASE_URL}/{TOKEN}"
-    result = application.bot.set_webhook(url=webhook_url)
-
-    if result:
-        return f'✅ Webhook установлен: {webhook_url}'
-    else:
-        return '❌ Ошибка установки webhook'
+    
+    # ИСПРАВЛЕНО: Используем loop фонового потока
+    future = asyncio.run_coroutine_threadsafe(
+        application.bot.set_webhook(url=webhook_url),
+        app_loop
+    )
+    
+    try:
+        result = future.result(timeout=10)
+        if result:
+            return f'✅ Webhook установлен: {webhook_url}'
+        else:
+            return '❌ Ошибка установки webhook'
+    except Exception as e:
+        return f'❌ Ошибка: {e}'
 
 
 @app.route('/delete_webhook', methods=['GET'])
 def delete_webhook():
-    """Удаляет webhook"""
-    result = application.bot.delete_webhook()
-
-    if result:
-        return '✅ Webhook удалён'
-    else:
-        return '❌ Ошибка удаления webhook'
+    future = asyncio.run_coroutine_threadsafe(
+        application.bot.delete_webhook(),
+        app_loop
+    )
+    
+    try:
+        result = future.result(timeout=10)
+        if result:
+            return '✅ Webhook удалён'
+        else:
+            return '❌ Ошибка удаления webhook'
+    except Exception as e:
+        return f'❌ Ошибка: {e}'
 
 
 if __name__ == '__main__':
