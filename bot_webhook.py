@@ -1,6 +1,9 @@
 import os
 import logging
 import asyncio
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from flask import Flask, request, jsonify
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
@@ -21,14 +24,20 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Создаём Application
+# ═══════════════════════════════════════════════════════════════
+# СОЗДАЁМ APPLICATION (без builder, чтобы контролировать loop)
+# ═══════════════════════════════════════════════════════════════
+
+# Глобальный loop для бота
+bot_loop = asyncio.new_event_loop()
+
+def get_bot_loop():
+    return bot_loop
+
+# Создаём Application вручную с контролируемым loop
 application = Application.builder().token(TOKEN).build()
 
-
-# ═══════════════════════════════════════════════════════════════
-# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
-# ═══════════════════════════════════════════════════════════════
-
+# Регистрируем обработчики
 async def check_subscription(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
     try:
         member = await context.bot.get_chat_member(CHANNEL_ID, user_id)
@@ -36,7 +45,6 @@ async def check_subscription(user_id: int, context: ContextTypes.DEFAULT_TYPE) -
     except Exception as e:
         logger.error(f"Ошибка проверки подписки: {e}")
         return False
-
 
 async def ask_subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = """🔒 Доступ к калькулятору только для подписчиков канала!
@@ -52,11 +60,6 @@ async def ask_subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text,
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
-
-
-# ═══════════════════════════════════════════════════════════════
-# ОБРАБОТЧИКИ
-# ═══════════════════════════════════════════════════════════════
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -101,7 +104,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
-
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
@@ -122,7 +124,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ])
         )
 
-
 async def open_calculator_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
@@ -142,20 +143,48 @@ async def open_calculator_handler(update: Update, context: ContextTypes.DEFAULT_
         ])
     )
 
-
-# Регистрируем обработчики
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CallbackQueryHandler(button_handler, pattern="^check_subscribe$"))
 application.add_handler(CallbackQueryHandler(open_calculator_handler, pattern="^open_calculator$"))
 
 
 # ═══════════════════════════════════════════════════════════════
-# ИНИЦИАЛИЗАЦИЯ (без фонового потока!)
+# ЗАПУСК APPLICATION В ФОНОВОМ ПОТОКЕ
 # ═══════════════════════════════════════════════════════════════
 
-# Инициализируем application один раз при импорте
-# В Render это выполняется при старте сервиса
-asyncio.run(application.initialize())
+def run_bot():
+    """Запускает bot event loop в отдельном потоке"""
+    asyncio.set_event_loop(bot_loop)
+    
+    # Инициализация
+    bot_loop.run_until_complete(application.initialize())
+    logger.info("✅ Application initialized")
+    
+    # Запускаем updater (без polling/webhook — просто фоновые задачи)
+    bot_loop.run_until_complete(application.start())
+    logger.info("✅ Application started")
+    
+    # Держим loop открытым
+    bot_loop.run_forever()
+
+# Запускаем ДО Flask
+bot_thread = threading.Thread(target=run_bot, daemon=True)
+bot_thread.start()
+
+# Ждём инициализации
+time.sleep(3)
+
+logger.info("🚀 Bot thread started, launching Flask...")
+
+
+# ═══════════════════════════════════════════════════════════════
+# ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ ВЫЗОВА async ИЗ SYNC
+# ═══════════════════════════════════════════════════════════════
+
+def run_async(coro):
+    """Выполняет корутину в bot_loop и возвращает результат"""
+    future = asyncio.run_coroutine_threadsafe(coro, bot_loop)
+    return future.result(timeout=15)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -166,29 +195,22 @@ asyncio.run(application.initialize())
 def index():
     return '🤖 Бот работает!'
 
-
 @app.route(f'/{TOKEN}', methods=['POST'])
 def webhook():
     """Получает обновления от Telegram"""
-    update = Update.de_json(request.get_json(force=True), application.bot)
-    
-    # Создаём новый event loop для каждого запроса
-    # python-telegram-bot v20+ корректно работает с новым loop
     try:
-        asyncio.run(application.process_update(update))
+        update = Update.de_json(request.get_json(force=True), application.bot)
+        run_async(application.process_update(update))
+        return jsonify({'status': 'ok'})
     except Exception as e:
         logger.error(f"Ошибка обработки update: {e}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
-    
-    return jsonify({'status': 'ok'})
-
 
 @app.route('/set_webhook', methods=['GET'])
 def set_webhook():
-    webhook_url = f"{WEBHOOK_BASE_URL}/{TOKEN}"
-    
     try:
-        result = asyncio.run(application.bot.set_webhook(url=webhook_url))
+        webhook_url = f"{WEBHOOK_BASE_URL}/{TOKEN}"
+        result = run_async(application.bot.set_webhook(url=webhook_url))
         if result:
             return f'✅ Webhook установлен: {webhook_url}'
         else:
@@ -196,11 +218,10 @@ def set_webhook():
     except Exception as e:
         return f'❌ Ошибка: {e}'
 
-
 @app.route('/delete_webhook', methods=['GET'])
 def delete_webhook():
     try:
-        result = asyncio.run(application.bot.delete_webhook())
+        result = run_async(application.bot.delete_webhook())
         if result:
             return '✅ Webhook удалён'
         else:
