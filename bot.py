@@ -5,7 +5,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppI
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 # ═══════════════════════════════════════
-TOKEN = os.getenv("BOT_TOKEN", "ВСТАВЬ_ТОКЕН_ОТ_@BotFather")
+TOKEN = os.getenv("TOKEN")
 WEB_APP_URL = "https://bombizo.github.io/quiz"
 CHANNEL_ID = "@beautycosmet1ics"
 # ═══════════════════════════════════════
